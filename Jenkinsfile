@@ -1,13 +1,14 @@
+```groovy
 pipeline {
     agent any
+
+    tools {
+        nodejs 'NodeJS-22'
+    }
 
     options {
         timestamps()
         disableConcurrentBuilds()
-    }
-
-    environment {
-        DOCKER_BUILDKIT = '1'
     }
 
     stages {
@@ -21,51 +22,51 @@ pipeline {
             steps {
                 sh '''
                     set -eu
+
                     test -f backend/package.json
                     test -f backend/package-lock.json
                     test -f backend/Dockerfile
+
                     test -f frontend/package.json
                     test -f frontend/package-lock.json
                     test -f frontend/Dockerfile
+
                     test -f docker-compose.yml
+
                     echo "All required project files are present."
                 '''
             }
         }
 
-        stage('Install and Verify Backend') {
+        stage('Install Backend Dependencies') {
             steps {
-                sh '''
-                    set -eu
-                    docker run --rm \
-                      -v "$WORKSPACE/backend:/app" \
-                      -w /app \
-                      node:22-alpine \
-                      npm ci --omit=dev --no-audit --no-fund
-                '''
+                dir('backend') {
+                    sh '''
+                        set -eu
+                        node --version
+                        npm --version
+                        npm ci --omit=dev --no-audit --no-fund
+                    '''
+                }
             }
         }
 
         stage('Build Frontend') {
             steps {
-                sh '''
-                    set -eu
-                    docker run --rm \
-                      -v "$WORKSPACE/frontend:/app" \
-                      -w /app \
-                      node:22-alpine \
-                      sh -c "npm ci --no-audit --no-fund && npm run build"
-                '''
+                dir('frontend') {
+                    sh '''
+                        set -eu
+                        npm ci --no-audit --no-fund
+                        npm run build
+                    '''
+                }
             }
         }
 
-        stage('Build Docker Images') {
+        stage('Archive Frontend Build') {
             steps {
-                sh '''
-                    set -eu
-                    docker build -t blogreact-backend:ci ./backend
-                    docker build -t blogreact-frontend:ci ./frontend
-                '''
+                archiveArtifacts artifacts: 'frontend/dist/**',
+                                 fingerprint: true
             }
         }
     }
@@ -74,11 +75,14 @@ pipeline {
         success {
             echo 'SUCCESS: BlogReact CI pipeline completed.'
         }
+
         failure {
             echo 'FAILED: Check the stage logs to identify the problem.'
         }
+
         always {
             echo 'BlogReact CI pipeline execution finished.'
         }
     }
 }
+```
