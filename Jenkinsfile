@@ -1,8 +1,6 @@
 pipeline {
-    agent any
-
-    tools {
-        nodejs 'NodeJS-22'
+    agent {
+        label 'windows-docker'
     }
 
     options {
@@ -19,68 +17,61 @@ pipeline {
 
         stage('Verify Project Files') {
             steps {
-                sh '''
-                    set -eu
-
-                    test -f backend/package.json
-                    test -f backend/package-lock.json
-                    test -f backend/Dockerfile
-
-                    test -f frontend/package.json
-                    test -f frontend/package-lock.json
-                    test -f frontend/Dockerfile
-
-                    test -f docker-compose.yml
-
-                    echo "All required project files are present."
+                bat '''
+                    if not exist backend\\package.json exit /b 1
+                    if not exist backend\\package-lock.json exit /b 1
+                    if not exist backend\\Dockerfile exit /b 1
+                    if not exist frontend\\package.json exit /b 1
+                    if not exist frontend\\package-lock.json exit /b 1
+                    if not exist frontend\\Dockerfile exit /b 1
+                    if not exist docker-compose.yml exit /b 1
+                    echo All required project files are present.
                 '''
             }
         }
 
-        stage('Install Backend Dependencies') {
+        stage('Verify Docker') {
             steps {
-                dir('backend') {
-                    sh '''
-                        set -eu
-                        node --version
-                        npm --version
-                        npm ci --omit=dev --no-audit --no-fund
-                    '''
-                }
+                bat '''
+                    docker --version
+                    docker info --format "{{.OSType}}"
+                '''
             }
         }
 
-        stage('Build Frontend') {
+        stage('Build Backend Image') {
             steps {
-                dir('frontend') {
-                    sh '''
-                        set -eu
-                        npm ci --no-audit --no-fund
-                        npm run build
-                    '''
-                }
+                bat 'docker build -t blogreact-backend:ci ./backend'
             }
         }
 
-        stage('Archive Frontend Build') {
+        stage('Build Frontend Image') {
             steps {
-                archiveArtifacts artifacts: 'frontend/dist/**',
-                                 fingerprint: true
+                bat 'docker build -t blogreact-frontend:ci ./frontend'
+            }
+        }
+
+        stage('Verify Docker Images') {
+            steps {
+                bat '''
+                    docker images blogreact-backend
+                    docker images blogreact-frontend
+                '''
             }
         }
     }
 
     post {
         success {
-            echo 'SUCCESS: BlogReact CI pipeline completed.'
+            echo 'SUCCESS: BlogReact Docker CI pipeline completed.'
         }
 
         failure {
-            echo 'FAILED: Check the stage logs to identify the problem.'
+            echo 'FAILED: Check the Jenkins console output.'
         }
 
         always {
-            echo 'BlogReact CI pipeline execution finished.'
+            echo 'BlogReact pipeline execution finished.'
         }
     }
 }
