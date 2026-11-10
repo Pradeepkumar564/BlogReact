@@ -6,6 +6,10 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
 FROM node:22-alpine AS production
+USER root
+
+RUN apk update && apk upgrade --no-cache \
+    && npm install --global npm@latest --no-audit --no-fund
 
 ENV NODE_ENV=production
 WORKDIR /app

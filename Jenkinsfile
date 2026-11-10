@@ -1,7 +1,5 @@
 pipeline {
-    agent {
-        label 'windows-docker'
-    }
+    agent any
 
     options {
         timestamps()
@@ -17,22 +15,23 @@ pipeline {
 
         stage('Verify Project Files') {
             steps {
-                bat '''
-                    if not exist backend\\package.json exit /b 1
-                    if not exist backend\\package-lock.json exit /b 1
-                    if not exist backend\\Dockerfile exit /b 1
-                    if not exist frontend\\package.json exit /b 1
-                    if not exist frontend\\package-lock.json exit /b 1
-                    if not exist frontend\\Dockerfile exit /b 1
-                    if not exist docker-compose.yml exit /b 1
-                    echo All required project files are present.
+                sh '''
+                    set -eu
+                    test -f backend/package.json
+                    test -f backend/package-lock.json
+                    test -f backend/Dockerfile
+                    test -f frontend/package.json
+                    test -f frontend/package-lock.json
+                    test -f frontend/Dockerfile
+                    test -f docker-compose.yml
+                    echo "All required project files are present."
                 '''
             }
         }
 
         stage('Verify Docker') {
             steps {
-                bat '''
+                sh '''
                     docker --version
                     docker info --format "{{.OSType}}"
                 '''
@@ -41,19 +40,19 @@ pipeline {
 
         stage('Build Backend Image') {
             steps {
-                bat 'docker build -t blogreact-backend:ci ./backend'
+                sh 'docker build -t blogreact-backend:ci ./backend'
             }
         }
 
         stage('Build Frontend Image') {
             steps {
-                bat 'docker build -t blogreact-frontend:ci ./frontend'
+                sh 'docker build -t blogreact-frontend:ci ./frontend'
             }
         }
 
         stage('Verify Docker Images') {
             steps {
-                bat '''
+                sh '''
                     docker images blogreact-backend
                     docker images blogreact-frontend
                 '''
