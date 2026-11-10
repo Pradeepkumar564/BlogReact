@@ -29,15 +29,12 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-
                     test -f backend/package.json
                     test -f backend/package-lock.json
                     test -f backend/Dockerfile
-
                     test -f frontend/package.json
                     test -f frontend/package-lock.json
                     test -f frontend/Dockerfile
-
                     test -f docker-compose.yml
 
                     echo "All required project files are present."
@@ -48,6 +45,7 @@ pipeline {
         stage('Verify Docker') {
             steps {
                 sh '''
+                    set -eu
                     docker --version
                     docker info --format "{{.OSType}}"
                 '''
@@ -64,14 +62,11 @@ pipeline {
                     sh '''
                         set -eu
                         set +x
-
                         export AWS_DEFAULT_REGION="$AWS_REGION"
                         export AWS_EC2_METADATA_DISABLED=true
 
                         echo "Checking AWS authentication..."
-
                         aws sts get-caller-identity
-
                         echo "AWS authentication successful."
                     '''
                 }
@@ -81,9 +76,8 @@ pipeline {
         stage('Build Backend Image') {
             steps {
                 sh '''
-                    docker build \
-                        -t blogreact-backend:ci \
-                        ./backend
+                    set -eu
+                    docker build -t blogreact-backend:ci ./backend
                 '''
             }
         }
@@ -91,9 +85,8 @@ pipeline {
         stage('Build Frontend Image') {
             steps {
                 sh '''
-                    docker build \
-                        -t blogreact-frontend:ci \
-                        ./frontend
+                    set -eu
+                    docker build -t blogreact-frontend:ci ./frontend
                 '''
             }
         }
@@ -158,6 +151,8 @@ pipeline {
                         | docker login \
                             --username AWS \
                             --password-stdin "$ECR_REGISTRY"
+
+                        echo "ECR login successful."
                     '''
                 }
             }
@@ -211,41 +206,69 @@ pipeline {
 
         stage('Deploy to Amazon EKS') {
             steps {
-                sh '''
-                    set -eu
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-credentials',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    sh '''
+                        set -eu
+                        set +x
 
-                    kubectl set image deployment/backend \
-                        backend="$ECR_REGISTRY/$BACKEND_IMAGE:$BUILD_NUMBER" \
-                        -n "$K8S_NAMESPACE"
+                        export AWS_DEFAULT_REGION="$AWS_REGION"
+                        export AWS_EC2_METADATA_DISABLED=true
 
-                    kubectl set image deployment/frontend \
-                        frontend="$ECR_REGISTRY/$FRONTEND_IMAGE:$BUILD_NUMBER" \
-                        -n "$K8S_NAMESPACE"
+                        kubectl set image deployment/backend \
+                            backend="$ECR_REGISTRY/$BACKEND_IMAGE:$BUILD_NUMBER" \
+                            -n "$K8S_NAMESPACE"
 
-                    echo "Application images updated."
-                '''
+                        kubectl set image deployment/frontend \
+                            frontend="$ECR_REGISTRY/$FRONTEND_IMAGE:$BUILD_NUMBER" \
+                            -n "$K8S_NAMESPACE"
+
+                        echo "Application images updated in EKS."
+                    '''
+                }
             }
         }
 
         stage('Verify EKS Deployment') {
             steps {
-                sh '''
-                    set -eu
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-credentials',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    sh '''
+                        set -eu
+                        set +x
 
-                    kubectl rollout status deployment/backend \
-                        -n "$K8S_NAMESPACE" \
-                        --timeout=180s
+                        export AWS_DEFAULT_REGION="$AWS_REGION"
+                        export AWS_EC2_METADATA_DISABLED=true
 
-                    kubectl rollout status deployment/frontend \
-                        -n "$K8S_NAMESPACE" \
-                        --timeout=180s
+                        echo "Checking backend rollout..."
 
-                    kubectl get pods -n "$K8S_NAMESPACE"
+                        kubectl rollout status deployment/backend \
+                            -n "$K8S_NAMESPACE" \
+                            --timeout=180s
 
-                    kubectl get services -n "$K8S_NAMESPACE"
+                        echo "Checking frontend rollout..."
 
-                    echo "EKS deployment completed successfully."
-                '''
+                        kubectl rollout status deployment/frontend \
+                            -n "$K8S_NAMESPACE" \
+                            --timeout=180s
+
+                        echo "Checking application pods..."
+
+                        kubectl get pods -n "$K8S_NAMESPACE"
+
+                        echo "Checking application services..."
+
+                        kubectl get services -n "$K8S_NAMESPACE"
+
+                        echo "EKS deployment completed successfully."
+                    '''
+                }
             }
         }
     }
