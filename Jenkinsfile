@@ -1,3 +1,4 @@
+
 pipeline {
     agent any
 
@@ -6,7 +7,18 @@ pipeline {
         disableConcurrentBuilds()
     }
 
+    environment {
+        AWS_REGION = 'ap-south-1'
+        AWS_ACCOUNT_ID = '478397108493'
+        ECR_REGISTRY = '478397108493.dkr.ecr.ap-south-1.amazonaws.com'
+        EKS_CLUSTER = 'blogreact-eks'
+        K8S_NAMESPACE = 'blogreact'
+        BACKEND_IMAGE = 'blogreact-backend'
+        FRONTEND_IMAGE = 'blogreact-frontend'
+    }
+
     stages {
+
         stage('Checkout Source Code') {
             steps {
                 checkout scm
@@ -17,13 +29,17 @@ pipeline {
             steps {
                 sh '''
                     set -eu
+
                     test -f backend/package.json
                     test -f backend/package-lock.json
                     test -f backend/Dockerfile
+
                     test -f frontend/package.json
                     test -f frontend/package-lock.json
                     test -f frontend/Dockerfile
+
                     test -f docker-compose.yml
+
                     echo "All required project files are present."
                 '''
             }
@@ -38,15 +54,47 @@ pipeline {
             }
         }
 
+        stage('Verify AWS Credentials') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-credentials',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    sh '''
+                        set -eu
+                        set +x
+
+                        export AWS_DEFAULT_REGION="$AWS_REGION"
+                        export AWS_EC2_METADATA_DISABLED=true
+
+                        echo "Checking AWS authentication..."
+
+                        aws sts get-caller-identity
+
+                        echo "AWS authentication successful."
+                    '''
+                }
+            }
+        }
+
         stage('Build Backend Image') {
             steps {
-                sh 'docker build -t blogreact-backend:ci ./backend'
+                sh '''
+                    docker build \
+                        -t blogreact-backend:ci \
+                        ./backend
+                '''
             }
         }
 
         stage('Build Frontend Image') {
             steps {
-                sh 'docker build -t blogreact-frontend:ci ./frontend'
+                sh '''
+                    docker build \
+                        -t blogreact-frontend:ci \
+                        ./frontend
+                '''
             }
         }
 
@@ -90,15 +138,125 @@ pipeline {
                 }
             }
         }
+
+        stage('Login to Amazon ECR') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-credentials',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    sh '''
+                        set -eu
+                        set +x
+
+                        export AWS_DEFAULT_REGION="$AWS_REGION"
+                        export AWS_EC2_METADATA_DISABLED=true
+
+                        aws ecr get-login-password \
+                            --region "$AWS_REGION" \
+                        | docker login \
+                            --username AWS \
+                            --password-stdin "$ECR_REGISTRY"
+                    '''
+                }
+            }
+        }
+
+        stage('Push Images to Amazon ECR') {
+            steps {
+                sh '''
+                    set -eu
+
+                    docker tag blogreact-backend:ci \
+                        "$ECR_REGISTRY/$BACKEND_IMAGE:$BUILD_NUMBER"
+
+                    docker tag blogreact-frontend:ci \
+                        "$ECR_REGISTRY/$FRONTEND_IMAGE:$BUILD_NUMBER"
+
+                    docker push "$ECR_REGISTRY/$BACKEND_IMAGE:$BUILD_NUMBER"
+
+                    docker push "$ECR_REGISTRY/$FRONTEND_IMAGE:$BUILD_NUMBER"
+
+                    echo "Both images pushed to Amazon ECR."
+                '''
+            }
+        }
+
+        stage('Configure EKS Access') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-credentials',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    sh '''
+                        set -eu
+                        set +x
+
+                        export AWS_DEFAULT_REGION="$AWS_REGION"
+                        export AWS_EC2_METADATA_DISABLED=true
+
+                        aws eks update-kubeconfig \
+                            --region "$AWS_REGION" \
+                            --name "$EKS_CLUSTER"
+
+                        kubectl get nodes
+
+                        echo "EKS connection successful."
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to Amazon EKS') {
+            steps {
+                sh '''
+                    set -eu
+
+                    kubectl set image deployment/backend \
+                        backend="$ECR_REGISTRY/$BACKEND_IMAGE:$BUILD_NUMBER" \
+                        -n "$K8S_NAMESPACE"
+
+                    kubectl set image deployment/frontend \
+                        frontend="$ECR_REGISTRY/$FRONTEND_IMAGE:$BUILD_NUMBER" \
+                        -n "$K8S_NAMESPACE"
+
+                    echo "Application images updated."
+                '''
+            }
+        }
+
+        stage('Verify EKS Deployment') {
+            steps {
+                sh '''
+                    set -eu
+
+                    kubectl rollout status deployment/backend \
+                        -n "$K8S_NAMESPACE" \
+                        --timeout=180s
+
+                    kubectl rollout status deployment/frontend \
+                        -n "$K8S_NAMESPACE" \
+                        --timeout=180s
+
+                    kubectl get pods -n "$K8S_NAMESPACE"
+
+                    kubectl get services -n "$K8S_NAMESPACE"
+
+                    echo "EKS deployment completed successfully."
+                '''
+            }
+        }
     }
 
     post {
         success {
-            echo 'SUCCESS: BlogReact CI pipeline and Nexus image push completed.'
+            echo 'SUCCESS: BlogReact CI/CD pipeline completed. Images pushed to Nexus and ECR, and EKS deployment verified.'
         }
 
         failure {
-            echo 'FAILED: Check the Jenkins console output.'
+            echo 'FAILED: Check Jenkins Console Output for the failing stage.'
         }
 
         always {
