@@ -58,11 +58,43 @@ pipeline {
                 '''
             }
         }
+
+        stage('Push Docker Images to Nexus') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'nexus-docker-credentials',
+                    usernameVariable: 'NEXUS_USERNAME',
+                    passwordVariable: 'NEXUS_PASSWORD'
+                )]) {
+                    sh '''
+                        set -eu
+                        set +x
+
+                        echo "$NEXUS_PASSWORD" | docker login \
+                            host.docker.internal:8083 \
+                            --username "$NEXUS_USERNAME" \
+                            --password-stdin
+
+                        docker tag blogreact-backend:ci \
+                            host.docker.internal:8083/blogreact-backend:${BUILD_NUMBER}
+
+                        docker tag blogreact-frontend:ci \
+                            host.docker.internal:8083/blogreact-frontend:${BUILD_NUMBER}
+
+                        docker push host.docker.internal:8083/blogreact-backend:${BUILD_NUMBER}
+
+                        docker push host.docker.internal:8083/blogreact-frontend:${BUILD_NUMBER}
+
+                        docker logout host.docker.internal:8083
+                    '''
+                }
+            }
+        }
     }
 
     post {
         success {
-            echo 'SUCCESS: BlogReact Docker CI pipeline completed.'
+            echo 'SUCCESS: BlogReact CI pipeline and Nexus image push completed.'
         }
 
         failure {
